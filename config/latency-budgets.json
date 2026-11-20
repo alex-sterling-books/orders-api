@@ -1,0 +1,12 @@
+{
+  "_comment": "Latency budget for orders-submit. Owned by the Orders team. Update in the same pull request as any change to a dependency call or the function timeout.",
+  "function": "orders-submit",
+  "own_work_ms": 500,
+  "safety_factor": 1.2,
+  "dependencies": {
+    "inventory-reserve": {
+      "worst_case_ms": 3500,
+      "source": "inventory-reserve slow path, Inventory team, reviewed 2026-12-09"
+    }
+  }
+}

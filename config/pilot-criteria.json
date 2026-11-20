@@ -1,0 +1,14 @@
+{
+  "_comment": "Decide these numbers with the team BEFORE the pilot starts. The values here are Northwind's fictional choices, not recommendations.",
+  "pilot": "Orders on-call, 2027-01-04 to 2027-01-29",
+  "rate_usd_per_agent_second": 0.0083,
+  "rate_checked": "2026-11-20, https://aws.amazon.com/devops-agent/pricing/",
+  "criteria": {
+    "min_reviewed_investigations": 12,
+    "min_share_root_cause_correct_or_useful": 0.6,
+    "max_share_misleading": 0.15,
+    "max_median_minutes_to_useful_hypothesis": 15,
+    "max_monthly_cost_usd": 400,
+    "max_guardrail_violations": 0
+  }
+}

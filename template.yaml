@@ -1,0 +1,254 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Northwind Supply Orders API (fictional). Lab stack for the book
+  Practical AWS DevOps Agent. Deploy only to a dedicated test account.
+
+Parameters:
+  OrdersSubmitTimeout:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 30
+    Description: Timeout in seconds for the orders-submit function.
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address subscribed to the alarm topic.
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    MemorySize: 256
+    Tags:
+      app: orders-api
+      environment: lab
+
+Resources:
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: orders
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: order_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: order_id
+          KeyType: HASH
+      Tags:
+        - Key: app
+          Value: orders-api
+        - Key: environment
+          Value: lab
+
+  OrdersHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      Tags:
+        app: orders-api
+        environment: lab
+
+  InventoryReserveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: inventory-reserve
+      CodeUri: src/inventory_reserve/
+      Handler: app.handler
+      Timeout: 10
+      Environment:
+        Variables:
+          BASE_LATENCY_MS: "250"
+          SLOW_RATE: "0.08"
+          SLOW_LATENCY_MS: "3500"
+
+  InventoryReserveLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${InventoryReserveFunction}
+      RetentionInDays: 7
+
+  OrdersSubmitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: orders-submit
+      CodeUri: src/orders_submit/
+      Handler: app.handler
+      Timeout: !Ref OrdersSubmitTimeout
+      AutoPublishAlias: live
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Ref OrdersTable
+          INVENTORY_FUNCTION: !Ref InventoryReserveFunction
+          APP_VERSION: "1.8.0"
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref OrdersTable
+        - LambdaInvokePolicy:
+            FunctionName: !Ref InventoryReserveFunction
+      Events:
+        SubmitOrder:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrdersHttpApi
+            Path: /orders
+            Method: POST
+
+  OrdersSubmitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${OrdersSubmitFunction}
+      RetentionInDays: 7
+
+  AlarmToAgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: alarm-to-agent
+      CodeUri: src/alarm_to_agent/
+      Handler: app.handler
+      Timeout: 15
+      Environment:
+        Variables:
+          WEBHOOK_PARAMETER: /orders-api/devops-agent-webhook
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: orders-api/devops-agent-webhook
+      Events:
+        AlarmNotification:
+          Type: SNS
+          Properties:
+            Topic: !Ref AlarmTopic
+
+  AlarmToAgentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AlarmToAgentFunction}
+      RetentionInDays: 7
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: orders-api-alarms
+      Tags:
+        - Key: app
+          Value: orders-api
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  Orders5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: OrdersApi-5xx-High
+      AlarmDescription: >
+        5xx rate for POST /orders above 2 percent in 3 of 5 one-minute
+        periods. Runbook: runbooks/orders-5xx.md
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 2
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+      Metrics:
+        - Id: errors
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/ApiGateway
+              MetricName: 5xx
+              Dimensions:
+                - Name: ApiId
+                  Value: !Ref OrdersHttpApi
+                - Name: Stage
+                  Value: prod
+            Period: 60
+            Stat: Sum
+        - Id: requests
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/ApiGateway
+              MetricName: Count
+              Dimensions:
+                - Name: ApiId
+                  Value: !Ref OrdersHttpApi
+                - Name: Stage
+                  Value: prod
+            Period: 60
+            Stat: Sum
+        - Id: rate
+          Label: 5xx rate (%)
+          ReturnData: true
+          Expression: "IF(requests > 0, 100 * errors / requests, 0)"
+
+  OrdersSubmitTimeoutFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref OrdersSubmitLogGroup
+      FilterPattern: '"Task timed out"'
+      MetricTransformations:
+        - MetricNamespace: Northwind/Orders
+          MetricName: OrdersSubmitTimeouts
+          MetricValue: "1"
+          DefaultValue: 0
+
+  OrdersSubmitTimeoutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: OrdersSubmit-Timeouts
+      AlarmDescription: >
+        orders-submit invocations are hitting the function timeout. Check the
+        live alias timeout and the latency of synchronous dependencies first.
+        Runbook: runbooks/orders-5xx.md
+      Namespace: Northwind/Orders
+      MetricName: OrdersSubmitTimeouts
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+      OKActions: [!Ref AlarmTopic]
+
+  OrdersTableWriteThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: OrdersTable-WriteThrottles
+      AlarmDescription: >
+        Writes to the orders table are being throttled. Ticket, not a page:
+        review capacity mode (postmortem action item 4).
+      Namespace: AWS/DynamoDB
+      MetricName: WriteThrottleEvents
+      Dimensions:
+        - Name: TableName
+          Value: !Ref OrdersTable
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  OrdersEndpoint:
+    Description: POST orders here
+    Value: !Sub https://${OrdersHttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/orders
+  AlarmTopicArn:
+    Value: !Ref AlarmTopic

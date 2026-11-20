@@ -1,0 +1,65 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # lets the deploy job request a GitHub OIDC token for AWS
+  contents: read
+
+jobs:
+  check:
+    # Runs on every pull request and on main: tests, template lint, and the
+    # release check from the 2026-12-08 postmortem.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test tools
+        run: pip install pytest boto3 cfn-lint
+
+      - name: Unit tests and template lint
+        run: |
+          make test
+          make lint
+
+      - name: Release check (timeout covers dependency calls)
+        run: python3 scripts/check_release.py
+
+  deploy:
+    needs: check
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Naming an environment makes GitHub record a deployment for each run.
+    # That deployment history is what AWS DevOps Agent can correlate with
+    # an incident. It also matches the OIDC trust condition in the role.
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Deploy
+        run: make deploy

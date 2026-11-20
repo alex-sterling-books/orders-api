@@ -1,0 +1,4 @@
+.agent-space-id
+.env
+.aws-sam/
+__pycache__/

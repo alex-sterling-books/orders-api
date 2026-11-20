@@ -1,0 +1,13 @@
+id,date,source,alarm,agent_seconds,minutes_to_useful_hypothesis,verdict,human_relied,notes
+P01,2027-01-05,webhook,OrdersApi-5xx-High,612,11,correct,no,shadow week; found config drift in stage variable
+P02,2027-01-06,webhook,OrdersSubmit-Timeouts,540,8,correct,no,shadow week; inventory slow path again
+P03,2027-01-07,chat,,180,,not_applicable,no,question about last deploy; not an incident
+P04,2027-01-08,webhook,OrdersTable-WriteThrottles,705,14,useful,no,named throttling and the scheduled promotion
+P05,2027-01-11,webhook,OrdersApi-5xx-High,1310,,misleading,no,blamed a deploy that changed only docs
+P06,2027-01-12,webhook,OrdersApi-5xx-High,660,9,correct,yes,expired certificate on partner endpoint
+P07,2027-01-14,webhook,OrdersSubmit-Timeouts,488,6,correct,yes,game day rerun
+P08,2027-01-18,webhook,OrdersApi-5xx-High,920,22,useful,yes,right service but wrong change at first
+P09,2027-01-19,webhook,OrdersApi-5xx-High,1544,,inconclusive,yes,cause was in payment provider; no telemetry for it
+P10,2027-01-21,webhook,OrdersSubmit-Timeouts,530,7,correct,yes,
+P11,2027-01-25,webhook,OrdersApi-5xx-High,701,12,correct,yes,
+P12,2027-01-27,webhook,OrdersTable-WriteThrottles,640,10,useful,yes,
